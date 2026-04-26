@@ -1,82 +1,98 @@
 name: Label & comment issues
-
+ 
 on:
   issues:
     types:
-      - reopened
       - opened
+      - reopened
       - closed
+ 
   pull_request:
     types:
       - opened
-
+ 
+permissions:
+  issues: write
+  pull-requests: read
+  contents: read
+ 
 jobs:
   label_issues:
+    if: ${{ github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'reopened') }}
     runs-on: ubuntu-latest
-    permissions:
-      issues: write
-      pull-requests: write
-
+ 
     steps:
-      # ✅ Attach labels only to issues (not PRs)
-      - name: Attach label to issues
-        if: github.event_name == 'issues' && github.event.action != 'closed'
-        uses: actions/github-script@v6
+      - name: Attach label to issue
+        uses: actions/github-script@v7
         with:
           script: |
-            github.rest.issues.addLabels({
-              issue_number: context.issue.number,
+            await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
+              issue_number: context.issue.number,
               labels: ["issue", "fix"]
             });
-
-      # ✅ Comment when a new issue is opened
+ 
       - name: Comment on new issue
-        if: github.event_name == 'issues' && github.event.action == 'opened'
-        uses: peter-evans/create-or-update-comment@v1
-        with:
-          issue-number: ${{ github.event.issue.number }}
-          body: |
-            Thanks for opening this issue! We'll take a look as soon as possible.
-
-      # ✅ Comment when an issue is closed
-      - name: Comment on closed issue
-        if: github.event_name == 'issues' && github.event.action == 'closed'
-        uses: peter-evans/create-or-update-comment@v1
-        with:
-          issue-number: ${{ github.event.issue.number }}
-          body: |
-            This issue has been closed. If you think this is incorrect, feel free to reopen it.
-
-      # ✅ Robust first pull request detection (works for ALL users)
-      - name: Comment on first pull request
-        if: github.event_name == 'pull_request' && github.event.action == 'opened'
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
-            const creator = context.payload.sender.login;
-
-            const opts = github.rest.issues.listForRepo.endpoint.merge({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              creator,
-              state: 'all'
-            });
-
-            const issues = await github.paginate(opts);
-
-            for (const issue of issues) {
-              if (issue.number === context.issue.number) continue;
-
-              if (issue.pull_request) {
-                return; // User already created a PR before
-              }
-            }
-
             await github.rest.issues.createComment({
-              issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: "🎉 Thanks for your first pull request! We appreciate your contribution."
+              issue_number: context.issue.number,
+              body: "Thanks for opening this issue! We'll take a look as soon as possible."
             });
+ 
+  comment_closed_issue:
+    if: ${{ github.event_name == 'issues' && github.event.action == 'closed' }}
+    runs-on: ubuntu-latest
+ 
+    steps:
+      - name: Comment when issue is closed
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: "The issue is now resolved."
+            });
+ 
+  comment_first_pull_request:
+    if: ${{ github.event_name == 'pull_request' && github.event.action == 'opened' }}
+    runs-on: ubuntu-latest
+ 
+    steps:
+      - name: Comment on first pull request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const username = context.payload.pull_request.user.login;
+            const currentPrNumber = context.payload.pull_request.number;
+ 
+            const allIssuesAndPullRequests = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                creator: username,
+                state: "all"
+              }
+            );
+ 
+            const previousPullRequests = allIssuesAndPullRequests.filter(item => {
+              return item.pull_request && item.number !== currentPrNumber;
+            });
+ 
+            if (previousPullRequests.length === 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: currentPrNumber,
+                body: "Congratulations! Thank you for opening your first pull request."
+              });
+            } else {
+              console.log("This is not the user's first pull request.");
+            }
